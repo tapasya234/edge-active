@@ -1,0 +1,29 @@
+# PyTorch
+torch==2.7.1
+torchvision==0.22.1
+
+# Qualcomm AI Hub
+qai_hub
+qai_hub_models
+
+# ONNX export and runtime
+onnx>=1.15.0
+onnxruntime>=1.16.0
+onnxscript
+
+# Data processing
+Pillow
+numpy
+av==16.0.1
+
+# Progress bars and utilities
+tqdm>=4.66.0
+
+# Optional but recommended
+matplotlib>=3.7.0  # For visualization
+scikit-learn>=1.3.0  # For metrics
+tensorboard>=2.14.0  # For training monitoring
+
+scipy
+pycocotools
+wheel

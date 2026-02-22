@@ -209,3 +209,7 @@ __marimo__/
 
 # Ignore the input data
 *.mp4
+
+# Ignore the generated and exported models for now. 
+*.pth
+*.onnx

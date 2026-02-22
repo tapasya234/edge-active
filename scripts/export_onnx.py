@@ -1,7 +1,3 @@
-"""
-Export trained model to ONNX for Qualcomm AI Hub submission
-"""
-
 import torch
 import torch.onnx
 import onnx
@@ -28,32 +24,6 @@ class ModelExporter:
         self.height = 112
         self.width = 112
 
-    # def load_model(self, num_classes):
-    #     """Load trained PyTorch model"""
-    #     import torchvision
-
-    #     # Create model architecture
-    #     model = torchvision.models.video.r2plus1d_18(weights=None)
-    #     model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
-
-    #     # Load checkpoint
-    #     checkpoint = torch.load(
-    #         self.checkpoint_path, map_location="cpu", weights_only=False
-    #     )
-
-    #     model.load_state_dict(
-    #         checkpoint["model"] if "model" in checkpoint else checkpoint, strict=True
-    #     )
-
-    #     model.eval()
-    #     model = model.to(torch.float32)
-
-    #     print(f"✓ Loaded model from {self.checkpoint_path}")
-    #     if "metrics" in checkpoint:
-    #         print(f"  Video Acc@1: {checkpoint['metrics']['video_acc1']:.2f}%")
-
-    #     return model
-
     def load_model(self, num_classes):
         """Load trained PyTorch model"""
 
@@ -66,7 +36,6 @@ class ModelExporter:
             self.checkpoint_path, map_location="cpu", weights_only=False
         )
 
-        # DEBUG: Check what's in the checkpoint
         print(f"Checkpoint keys: {checkpoint.keys()}")
 
         # Handle both checkpoint formats
@@ -75,18 +44,52 @@ class ModelExporter:
             model.load_state_dict(
                 state_dict, strict=True
             )  # Add strict=True to catch errors
-            print(f"✓ Loaded {len(state_dict)} layers from checkpoint")
+            print(f"Loaded {len(state_dict)} layers from checkpoint")
         else:
             model.load_state_dict(checkpoint, strict=True)
 
         model.eval()
         model = model.to(torch.float32)
 
-        # DEBUG: Count parameters
         total_params = sum(p.numel() for p in model.parameters())
         print(f"Total parameters: {total_params:,}")
 
         return model
+
+    # def load_model(self):
+    #     import torchvision.models.video as video_models
+
+    #     """Load trained PyTorch model"""
+    #     print(f"Loading model from {self.checkpoint_path}")
+
+    #     # Create model architecture
+    #     if self.model_name == "r2plus1d_18":
+    #         model = video_models.r2plus1d_18(weights=None)
+    #         in_features = model.fc.in_features
+    #         model.fc = nn.Linear(in_features, self.num_classes)
+    #     elif self.model_name == "mc3_18":
+    #         model = video_models.mc3_18(weights=None)
+    #         in_features = model.fc.in_features
+    #         model.fc = nn.Linear(in_features, self.num_classes)
+    #     elif self.model_name == "r3d_18":
+    #         model = video_models.r3d_18(weights=None)
+    #         in_features = model.fc.in_features
+    #         model.fc = nn.Linear(in_features, self.num_classes)
+    #     else:
+    #         raise ValueError(f"Unknown model: {self.model_name}")
+
+    #     # Load checkpoint
+    #     checkpoint = torch.load(self.checkpoint_path, map_location="cpu")
+
+    #     if "model_state_dict" in checkpoint:
+    #         model.load_state_dict(checkpoint["model_state_dict"])
+    #         print(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 'unknown')}")
+    #         print(f"Validation accuracy: {checkpoint.get('val_acc', 'unknown'):.2f}%")
+    #     else:
+    #         model.load_state_dict(checkpoint)
+
+    #     model.eval()
+    #     return model
 
     def export_to_onnx(self, model, onnx_path):
         """Export model to ONNX format"""
@@ -108,42 +111,20 @@ class ModelExporter:
             output = model(dummy_input)
             print(f"  Sanity check output shape: {tuple(output.shape)}")
 
-        # Export with dynamo fallback
-        try:
-            torch.onnx.export(
-                model,
-                dummy_input,
-                onnx_path,
-                export_params=True,
-                opset_version=18,
-                do_constant_folding=True,
-                input_names=["video"],
-                output_names=["logits"],
-                # dynamic_axes={"video": {0: "batch"}, "logits": {0: "batch"}},
-                verbose=False,
-                training=torch.onnx.TrainingMode.EVAL,
-                dynamo=True,
-            )
-            print("✓ ONNX export complete (dynamo=True)")
-        except Exception as e:
-            print(f"  dynamo export failed: {e}")
-            print("  Retrying with dynamo=False...")
-
-            torch.onnx.export(
-                model,
-                dummy_input,
-                onnx_path,
-                export_params=True,
-                opset_version=18,
-                do_constant_folding=True,
-                input_names=["video"],
-                output_names=["logits"],
-                dynamic_axes={"video": {0: "batch"}, "logits": {0: "batch"}},
-                verbose=False,
-                training=torch.onnx.TrainingMode.EVAL,
-                dynamo=False,
-            )
-            print("✓ ONNX export complete (dynamo=False)")
+        torch.onnx.export(
+            model,
+            dummy_input,
+            onnx_path,
+            export_params=True,
+            opset_version=18,
+            do_constant_folding=True,
+            input_names=["video"],
+            output_names=["logits"],
+            verbose=False,
+            training=torch.onnx.TrainingMode.EVAL,
+            dynamo=False,
+        )
+        print("ONNX export complete (dynamo=False)")
 
     def verify_onnx(self, onnx_path):
         """Verify ONNX model"""
@@ -191,7 +172,7 @@ class ModelExporter:
         # Run inference
         outputs = session.run(None, {"video": test_input})
 
-        print(f"✓ Inference successful")
+        print(f"  Inference successful")
         print(f"  Output shape: {outputs[0].shape}")
         print(f"  Predicted class: {np.argmax(outputs[0])}")
 
@@ -214,8 +195,7 @@ class ModelExporter:
 
         # Export to ONNX
         onnx_path = self.output_dir / f"{model_name}.onnx"
-        # self.export_to_onnx(model, onnx_path)
-        self.export_to_torchscript(model, onnx_path)
+        self.export_to_onnx(model, onnx_path)
 
         # Verify
         self.verify_onnx(onnx_path)
@@ -261,29 +241,6 @@ class ModelExporter:
 
         return onnx_path
 
-    def export_to_torchscript(self, model, output_path):
-        """Export to TorchScript as alternative"""
-        print(f"\nExporting to TorchScript: {output_path}")
-
-        dummy_input = torch.randn(
-            self.batch_size,
-            self.num_channels,
-            self.num_frames,
-            self.height,
-            self.width,
-            dtype=torch.float32,
-        )
-
-        with torch.no_grad():
-            traced = torch.jit.trace(model, dummy_input)
-            traced.save(output_path)
-
-        print(f"✓ TorchScript export complete")
-
-        # Check size
-        size_mb = Path(output_path).stat().st_size / (1024 * 1024)
-        print(f"  File size: {size_mb:.2f} MB")
-
 
 def main():
     """Main export script"""
@@ -313,7 +270,7 @@ def main():
 
     # Export model
     exporter = ModelExporter(args.checkpoint, args.output_dir)
-    onnx_path = exporter.export(args.num_classes, args.name)
+    exporter.export(args.num_classes, args.name)
 
     print("\n✓ Ready for AI Hub submission!")
 
