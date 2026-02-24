@@ -1,6 +1,5 @@
 import datetime
 import time
-import warnings
 import json
 import random
 import numpy as np
@@ -18,7 +17,9 @@ from torchvision.datasets.samplers import (
     RandomClipSampler,
     UniformClipSampler,
 )
+
 from kinetics_dataset import KineticsWithVideoId
+from save_configs import save_config
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]
@@ -120,13 +121,12 @@ def evaluate(model, criterion, data_loader, num_classes, device):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = "Test:"
-    num_processed_samples = 0
+
     num_videos = len(data_loader.dataset.samples)
 
-    agg_preds = torch.zeros(
-        (num_videos, num_classes), dtype=torch.float32, device=device
-    )
-    agg_targets = torch.zeros((num_videos), dtype=torch.long, device=device)
+    agg_preds = torch.zeros((num_videos, num_classes), dtype=torch.float32)
+    agg_targets = torch.zeros((num_videos,), dtype=torch.long)
+    clip_counts = torch.zeros((num_videos,), dtype=torch.float32)
 
     with torch.inference_mode():
         for video, _, target, video_idx in metric_logger.log_every(
@@ -134,30 +134,33 @@ def evaluate(model, criterion, data_loader, num_classes, device):
         ):
             video = video.to(device, non_blocking=True)
             target = target.to(device, non_blocking=True)
-            video_idx = video_idx.to(device, non_blocking=True)
 
             output = model(video)
             loss = criterion(output, target)
-            preds = torch.softmax(output, dim=1)
 
-            agg_preds.index_add_(0, video_idx, preds)
-            agg_targets.index_copy_(0, video_idx, target)
+            idx = video_idx.cpu()
+            tgt = target.cpu()
+
+            agg_preds.index_add_(0, idx, output.cpu())
+            # clip_counts.index_add_(0, idx, torch.ones_like(idx, dtype=torch.float32))
+            clip_counts.index_add_(0, idx, torch.ones(idx.shape[0]))
+            agg_targets.index_copy_(0, idx, tgt)
 
             acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
             batch_size = video.shape[0]
+
             metric_logger.update(loss=loss.item())
             metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
             metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
-            num_processed_samples += batch_size
 
     metric_logger.synchronize_between_processes()
-    agg_preds = utils.reduce_across_processes(agg_preds)
-    agg_targets = utils.reduce_across_processes(
-        agg_targets, op=torch.distributed.ReduceOp.MAX
-    )
+
+    clip_counts = clip_counts.clamp(min=1.0).unsqueeze(1)
+    agg_preds = agg_preds / clip_counts
 
     print(
-        f" * Clip Acc@1 {metric_logger.acc1.global_avg:.3f} Clip Acc@5 {metric_logger.acc5.global_avg:.3f}"
+        f" * Clip Acc@1 {metric_logger.acc1.global_avg:.3f} "
+        f"Clip Acc@5 {metric_logger.acc5.global_avg:.3f}"
     )
 
     agg_acc1, agg_acc5 = utils.accuracy(agg_preds, agg_targets, topk=(1, 5))
@@ -262,7 +265,8 @@ def get_dataloader(args, dataset, sampler):
         num_workers=args.workers,
         pin_memory=True,
         collate_fn=default_collate,
-        persistent_workers=True if args.workers > 0 else False,
+        # persistent_workers=True if args.workers > 0 else False,
+        persistent_workers=False,
     )
 
 
@@ -376,12 +380,17 @@ def main(args):
 
     args.data_path = Path(args.data_path)
 
+    # Save the args used when running the command
+    save_config(args)
+
     valid_dataset = load_valid_dataset(
         args, tuple(args.val_crop_size), tuple(args.val_resize_size)
     )
     num_classes = len(valid_dataset.classes)
 
-    test_sampler = UniformClipSampler(valid_dataset.video_clips, args.clips_per_video)
+    test_sampler = UniformClipSampler(
+        valid_dataset.video_clips, args.val_clips_per_video
+    )
     if args.distributed:
         test_sampler = DistributedSampler(test_sampler, shuffle=False)
     valid_dataloader = get_dataloader(args, valid_dataset, test_sampler)
@@ -403,7 +412,9 @@ def main(args):
     train_dataset = load_train_dataset(
         args, tuple(args.train_crop_size), tuple(args.train_resize_size)
     )
-    train_sampler = RandomClipSampler(train_dataset.video_clips, args.clips_per_video)
+    train_sampler = RandomClipSampler(
+        train_dataset.video_clips, args.train_clips_per_video
+    )
     if args.distributed:
         train_sampler = DistributedSampler(train_sampler)
     train_dataloader = get_dataloader(args, train_dataset, train_sampler)
@@ -511,6 +522,21 @@ def main(args):
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print(f"Training time {total_time_str}")
 
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            dist.destroy_process_group()
+
+        # Force cleanup of MPS cache on Mac
+        if device.type == "mps":
+            torch.mps.empty_cache()
+            torch.mps.synchronize()
+
+        # Explicitly exit to prevent hanging
+        import sys
+
+        sys.exit(0)
+
 
 def get_args_parser(add_help=True):
     import argparse
@@ -538,10 +564,16 @@ def get_args_parser(add_help=True):
     )
     parser.add_argument("--frame-rate", default=4, type=int)
     parser.add_argument(
-        "--clips-per-video",
+        "--train-clips-per-video",
         default=1,
         type=int,
-        help="maximum number of clips per video to consider",
+        help="maximum number of clips per video to consider during training",
+    )
+    parser.add_argument(
+        "--val-clips-per-video",
+        default=1,
+        type=int,
+        help="maximum number of clips per video to consider during evaluation",
     )
     parser.add_argument("-b", "--batch-size", default=24, type=int)
     parser.add_argument("--epochs", default=15, type=int)

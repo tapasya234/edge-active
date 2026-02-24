@@ -35,7 +35,7 @@ def inspect_checkpoint(checkpoint_path: str):
         }
 
     with open(inspection_path, "w") as f:
-        json.dump(output, f, indent=2, sort_keys=True)
+        json.dump(output, f, indent=2, sort_keys=True, default=str)
 
     print(f"Inspection data saved to {inspection_path}")
 

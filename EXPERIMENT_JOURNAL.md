@@ -48,11 +48,13 @@ Why are you running this experiment? What do you expect to improve?
 
 ## Experiments Log
 
-### Run ID: `baseline_run1` ✅
+### Run ID: `baseline_run1`
 
-**Date:** 2025-02-17  
-**Checkpoint:** `./checkpoints/baseline_run1/checkpoint_best.pth`  
-**Status:** ✅ Complete
+- **Date:** 2025-02-17  
+- **Checkpoint:** `./checkpoints/baseline_run1/checkpoint_best.pth`  
+- **Status:** ✅ Complete
+- **Compile Job ID:** jg94xe1w5 (Quantized)
+- **Profile Job ID:** jpevymdo5 (Quantized)
 
 #### Hypothesis / Motivation
 
@@ -115,15 +117,15 @@ Establish baseline by fine-tuning official checkpoint on QEVD dataset to underst
 
 ---
 
-### Run ID: `baseline_192x192_load_official` 🔄
+### Run ID: `baseline_192x192_load_official`
 
-**Date:** 2025-02-21  
-**Checkpoint:** `./checkpoints/baseline_192x192/checkpoint_best.pth`  
-**Status:** ✅ Complete
-**Compile Job ID:** jp87e2zo5 (Not Quantized)
-**Profile Job ID:** jp3mznmng (Not Quantized)
-**Compile Job ID:** jgjlrdlep (Quantized)
-**Profile Job ID:** jpev7ovv5 (Quantized)
+- **Date:** 2025-02-21  
+- **Checkpoint:** `./checkpoints/baseline_192x192/checkpoint_best.pth`  
+- **Status:** ✅ Complete
+- **Compile Job ID:** jp87e2zo5 (Not Quantized)
+- **Profile Job ID:** jp3mznmng (Not Quantized)
+- **Compile Job ID:** jgjlrdlep (Quantized)
+- **Profile Job ID:** jpev7ovv5 (Quantized)
 
 #### Hypothesis / Motivation
 
@@ -168,9 +170,9 @@ Current 112×112 resolution may be losing important spatial details for activity
 
 ### Run ID: `baseline_192x192_3clips`
 
-**Date:** 2025-02-XX  
+**Date:** 2025-02-22  
 **Checkpoint:** `./checkpoints/baseline_192x192_3clips/checkpoint_best.pth`  
-**Status:** 📋 Planned
+**Status:** ✅ Complete
 
 #### Hypothesis / Motivation
 
@@ -190,18 +192,44 @@ Using only 1 clip per video during training may miss important temporal variatio
   - Batch size: 16
   - Learning rate: 0.01
   - Epochs: 15
+  - Training time: ~30 hours
 
 #### Results
 
-*To be filled after training*
+| Metric | Value | vs baseline_run1 | vs baseline_192x192 |
+| -------- | ------- | ------------------ | --------------------- |
+| Video Acc@1 | 99.28% | +2.44% | +0.69% |
+| Clip Acc@1 | 98.01% | +1.17% | -0.58% |
+| Video Acc@5 | 100.0% | +3.16% | +0.11% |
+| Inference Time | TBD (est. ~5.7ms) | TBD | TBD |
+| Training Time | ~30 hrs | +8.7 hrs | N/A |
 
 #### Analysis
 
-*To be filled after training*
+**What worked exceptionally well:**
+
+- **3-clip aggregation** significantly improved video-level accuracy (+0.69%)
+- **Top-5 accuracy reached 100%** from epoch 7 onwards - perfect on hard examples
+- **Training remained stable** despite increased complexity
+- **Minimal overfitting** - train/val gap remained small throughout
+
+**Trade-offs:**
+
+- Training took ~3x longer due to 3 clips per video
+- Slightly lower clip-level accuracy (-0.58%) but much better video-level accuracy
+- Inference will require 3 forward passes + aggregation (~5.7ms total, still excellent)
+
+**Key insight:**
+Multi-clip aggregation is **highly effective** for this dataset. The model learns complementary information from different temporal segments, and voting/averaging reduces errors.
 
 #### Next Steps
 
-*To be determined based on results*
+- [x] Train with 192×192 resolution and 3 clips
+- [ ] Profile inference time on AI Hub (expect ~5.7ms for 3 clips)
+- [ ] Try different aggregation strategies (max, weighted average)
+- [ ] Experiment with larger models (r2plus1d_34) now that we have latency headroom
+- [ ] Try 5 clips per video to see if accuracy improves further
+- [ ] Test-time augmentation with multiple crops
 
 ---
 
@@ -232,8 +260,8 @@ Modern vision transformer architecture (MViT v2) may outperform CNN-based approa
 | Run ID | Video Acc@1 | Inference Time | Model Size | Notes |
 | -------- | ------------- | ---------------- | ------------ | ------- |
 | baseline_run1 | 96.84% | 2.3 ms | 120 MB | Official checkpoint fine-tuned |
-| baseline_192x192 | TBD | TBD | TBD | Higher resolution |
-| baseline_192x192_3clips | TBD | TBD | TBD | Multi-clip |
+| baseline_192x192 | 98.59% | TBD | 120 MB | Higher resolution |
+| baseline_192x192_3clips | 99.28% | TBD | 120 MB | Multi-clip |
 
 ---
 
