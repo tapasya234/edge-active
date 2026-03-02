@@ -213,3 +213,4 @@ __marimo__/
 # Ignore the generated and exported models for now. 
 *.pth
 *.onnx
+*.npy
