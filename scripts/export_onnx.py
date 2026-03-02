@@ -56,41 +56,6 @@ class ModelExporter:
 
         return model
 
-    # def load_model(self):
-    #     import torchvision.models.video as video_models
-
-    #     """Load trained PyTorch model"""
-    #     print(f"Loading model from {self.checkpoint_path}")
-
-    #     # Create model architecture
-    #     if self.model_name == "r2plus1d_18":
-    #         model = video_models.r2plus1d_18(weights=None)
-    #         in_features = model.fc.in_features
-    #         model.fc = nn.Linear(in_features, self.num_classes)
-    #     elif self.model_name == "mc3_18":
-    #         model = video_models.mc3_18(weights=None)
-    #         in_features = model.fc.in_features
-    #         model.fc = nn.Linear(in_features, self.num_classes)
-    #     elif self.model_name == "r3d_18":
-    #         model = video_models.r3d_18(weights=None)
-    #         in_features = model.fc.in_features
-    #         model.fc = nn.Linear(in_features, self.num_classes)
-    #     else:
-    #         raise ValueError(f"Unknown model: {self.model_name}")
-
-    #     # Load checkpoint
-    #     checkpoint = torch.load(self.checkpoint_path, map_location="cpu")
-
-    #     if "model_state_dict" in checkpoint:
-    #         model.load_state_dict(checkpoint["model_state_dict"])
-    #         print(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 'unknown')}")
-    #         print(f"Validation accuracy: {checkpoint.get('val_acc', 'unknown'):.2f}%")
-    #     else:
-    #         model.load_state_dict(checkpoint)
-
-    #     model.eval()
-    #     return model
-
     def export_to_onnx(self, model, onnx_path):
         """Export model to ONNX format"""
         print(f"\nExporting to ONNX: {onnx_path}")

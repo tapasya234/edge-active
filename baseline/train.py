@@ -176,10 +176,12 @@ def evaluate(model, criterion, data_loader, num_classes, device):
     }
 
 
-def _get_cache_path(filepath, args):
+def _get_cache_path(filepath, args, split):
     import hashlib
 
-    value = f"{filepath}-{args.clip_len}-{args.kinetics_version}-{args.frame_rate}"
+    value = (
+        f"{filepath}-{split}-{args.clip_len}-{args.kinetics_version}-{args.frame_rate}"
+    )
     h = hashlib.sha1(value.encode()).hexdigest()
     return (
         Path.home() / ".torch" / "vision" / "datasets" / "kinetics" / (h[:10] + ".pt")
@@ -190,7 +192,7 @@ def load_train_dataset(args, crop_size: tuple, resize_size: tuple):
     print("Loading training data")
     st = time.time()
     train_data_path = args.data_path / "train"
-    cache_path = _get_cache_path(train_data_path, args)
+    cache_path = _get_cache_path(train_data_path, args, split="train")
     transform_train = presets.VideoClassificationPresetTrain(
         crop_size=crop_size, resize_size=resize_size
     )
@@ -223,7 +225,7 @@ def load_train_dataset(args, crop_size: tuple, resize_size: tuple):
 def load_valid_dataset(args, crop_size: tuple, resize_size: tuple):
     print("Loading validation data")
     valid_data_path = args.data_path / "val"
-    cache_path = _get_cache_path(valid_data_path, args)
+    cache_path = _get_cache_path(valid_data_path, args, split="val")
 
     if args.weights and args.test_only:
         weights = torchvision.models.get_weight(args.weights)
@@ -395,6 +397,10 @@ def main(args):
         test_sampler = DistributedSampler(test_sampler, shuffle=False)
     valid_dataloader = get_dataloader(args, valid_dataset, test_sampler)
 
+    print("Validation Dataset")
+    print("Total videos:", len(valid_dataset.samples))
+    print("Total clips:", valid_dataset.video_clips.num_clips())
+    print("Sample path example:", valid_dataset.samples[:10])
     model = load_model(args, device=device, num_classes=num_classes)
     criterion = nn.CrossEntropyLoss()
 
@@ -418,6 +424,11 @@ def main(args):
     if args.distributed:
         train_sampler = DistributedSampler(train_sampler)
     train_dataloader = get_dataloader(args, train_dataset, train_sampler)
+
+    print("Training Dataset")
+    print("Total videos:", len(train_dataset.samples))
+    print("Total clips:", train_dataset.video_clips.num_clips())
+    print("Sample path example:", train_dataset.samples[:10])
 
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -586,7 +597,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--lr-warmup-epochs", default=10, type=int)
     parser.add_argument("--lr-warmup-method", default="linear", type=str)
     parser.add_argument("--lr-warmup-decay", default=0.001, type=float)
-    parser.add_argument("--print-freq", default=10, type=int)
+    parser.add_argument("--print-freq", default=100, type=int)
     parser.add_argument("--output-dir", default=str(ROOT / "checkpoints"), type=str)
     parser.add_argument("--resume", default="", type=str)
     parser.add_argument("--start-epoch", default=0, type=int)
