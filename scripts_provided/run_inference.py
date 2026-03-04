@@ -35,7 +35,7 @@ W = 112
 IS_DLC_CHANNEL_LAST = True  # True for the official Qualcomm-provided .bin
 
 # Path to the directory of preprocessed .npy tensors.
-data_path = ""
+data_path = "/Users/tapasyagutta/workspace/edge-active/output_tensors"
 # Name prefix used when uploading dataset chunks to QAI Hub.
 DATASET_NAME = "dataset"
 
@@ -47,7 +47,7 @@ SINGLE_TENSOR_PATH = ""
 SINGLE_TENSOR_INDEX = 0
 
 # Output HDF5 file written after inference, consumed by evaluate.py.
-OUTPUT_H5 = "dataset-export.h5"
+OUTPUT_H5 = "/Users/tapasyagutta/workspace/edge-active/inference_results/dataset_export_j57d1jql5.h5"
 
 # =============================================================================
 # Early config validation — fail fast before any expensive work

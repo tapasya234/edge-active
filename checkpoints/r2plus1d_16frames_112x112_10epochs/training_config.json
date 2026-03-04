@@ -1,13 +1,13 @@
 {
   "amp": false,
-  "batch_size": 16,
+  "batch_size": 20,
   "cache_dataset": true,
-  "clip_len": 8,
+  "clip_len": 16,
   "data_path": "/Users/tapasyagutta/workspace/edge-active/data/QEVD_organised",
   "device": "mps",
   "dist_url": "env://",
   "distributed": false,
-  "epochs": 15,
+  "epochs": 10,
   "frame_rate": 4,
   "kinetics_version": "400",
   "load_official_checkpoint": true,
@@ -23,30 +23,30 @@
   "lr_warmup_method": "linear",
   "model": "r2plus1d_18",
   "momentum": 0.9,
-  "output_dir": "checkpoints/baseline_192x192_3clips",
+  "output_dir": "checkpoints/r2plus1d_16frames_112x112_10epochs",
   "print_freq": 100,
-  "resume": "./checkpoints/baseline_192x192_3clips/checkpoint_best.pth",
+  "resume": "",
   "start_epoch": 0,
   "sync_bn": false,
   "test_only": false,
   "train_clips_per_video": 1,
   "train_crop_size": [
-    192,
-    192
+    112,
+    112
   ],
   "train_resize_size": [
-    220,
-    250
+    128,
+    171
   ],
   "use_deterministic_algorithms": false,
   "val_clips_per_video": 3,
   "val_crop_size": [
-    192,
-    192
+    112,
+    112
   ],
   "val_resize_size": [
-    220,
-    250
+    128,
+    171
   ],
   "weight_decay": 0.0001,
   "weights": null,

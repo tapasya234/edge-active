@@ -1,27 +1,26 @@
 {
   "Checkpoint Name": "checkpoint_best.pth",
-  "Epoch": 14,
+  "Epoch": 0,
   "Final Metrics": {
-    "clip_acc1": 74.80782669461915,
-    "clip_acc5": 92.8109713487072,
-    "clip_loss": 0.9012396615310754,
-    "video_acc1": 74.8166275024414,
-    "video_acc5": 92.81348419189453
+    "clip_acc1": 90.7365151803258,
+    "clip_acc5": 99.27425999873233,
+    "clip_loss": 0.2918077862912409,
+    "video_acc1": 92.33321380615234,
+    "video_acc5": 99.44987487792969
   },
   "Training Configuration": {
     "amp": false,
-    "batch_size": 16,
+    "batch_size": 20,
     "cache_dataset": true,
-    "clip_len": 8,
-    "clips_per_video": 1,
+    "clip_len": 16,
     "data_path": "/Users/tapasyagutta/workspace/edge-active/data/QEVD_organised",
     "device": "mps",
     "dist_url": "env://",
     "distributed": false,
-    "epochs": 15,
+    "epochs": 10,
     "frame_rate": 4,
     "kinetics_version": "400",
-    "load_official_checkpoint": false,
+    "load_official_checkpoint": true,
     "lr": 0.01,
     "lr_gamma": 0.1,
     "lr_milestones": [
@@ -34,28 +33,30 @@
     "lr_warmup_method": "linear",
     "model": "r2plus1d_18",
     "momentum": 0.9,
-    "output_dir": "./checkpoints/baseline_192x192",
-    "print_freq": 10,
+    "output_dir": "checkpoints/r2plus1d_16frames_112x112_10epochs",
+    "print_freq": 100,
     "resume": "",
     "start_epoch": 0,
     "sync_bn": false,
     "test_only": false,
+    "train_clips_per_video": 1,
     "train_crop_size": [
-      192,
-      192
+      112,
+      112
     ],
     "train_resize_size": [
-      220,
-      250
+      128,
+      171
     ],
     "use_deterministic_algorithms": false,
+    "val_clips_per_video": 3,
     "val_crop_size": [
-      192,
-      192
+      112,
+      112
     ],
     "val_resize_size": [
-      220,
-      250
+      128,
+      171
     ],
     "weight_decay": 0.0001,
     "weights": null,
