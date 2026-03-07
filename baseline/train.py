@@ -24,6 +24,11 @@ from save_configs import save_config
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]
 
+import os
+
+os.environ["OMP_NUM_THREADS"] = "8"
+os.environ["MKL_NUM_THREADS"] = "8"
+
 
 def system_config(
     seed_value: int = 42, should_use_deterministic_algorithms: bool = False
@@ -183,8 +188,32 @@ def _get_cache_path(filepath, args, split):
         f"{filepath}-{split}-{args.clip_len}-{args.kinetics_version}-{args.frame_rate}"
     )
     h = hashlib.sha1(value.encode()).hexdigest()
+
+    if args.device == "cuda":
+        cache_root = Path("/home/jl_fs/kinetics_cache")
+        cache_root.mkdir(parents=True, exist_ok=True)
+
+        return cache_root / (h[:10] + ".pt")
+
     return (
         Path.home() / ".torch" / "vision" / "datasets" / "kinetics" / (h[:10] + ".pt")
+    )
+
+
+def _get_precomputed_metadata_path(args):
+    if args.device == "cuda":
+        cache_root = Path("/home/jl_fs/kinetics_cache")
+        cache_root.mkdir(parents=True, exist_ok=True)
+
+        return cache_root / "kinetics_metadata.pt"
+
+    return (
+        Path.home()
+        / ".torch"
+        / "vision"
+        / "datasets"
+        / "kinetics"
+        / "kinetics_metadata.pt"
     )
 
 
@@ -203,21 +232,27 @@ def load_train_dataset(args, crop_size: tuple, resize_size: tuple):
         dataset.transform = transform_train
         return dataset
 
+    metadata_path = _get_precomputed_metadata_path()
     dataset = KineticsWithVideoId(
         args.data_path,
         frames_per_clip=args.clip_len,
         num_classes=args.kinetics_version,
         split="train",
-        step_between_clips=1,
+        step_between_clips=args.clip_len // 2,
         transform=transform_train,
         frame_rate=args.frame_rate,
         extensions=("avi", "mp4"),
         output_format="TCHW",
+        _precomputed_metadata=metadata_path if metadata_path.exists() else None,
     )
 
     if args.cache_dataset:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         utils.save_on_master((dataset, train_data_path), cache_path)
+
+        if not metadata_path.exists():
+            torch.save(dataset.video_clips.metadata, metadata_path)
+
     print("Took", time.time() - st)
     return dataset
 
@@ -241,21 +276,26 @@ def load_valid_dataset(args, crop_size: tuple, resize_size: tuple):
         dataset.transform = transform_test
         return dataset
 
+    metadata_path = _get_precomputed_metadata_path()
     dataset = KineticsWithVideoId(
         args.data_path,
         frames_per_clip=args.clip_len,
         num_classes=args.kinetics_version,
         split="val",
-        step_between_clips=1,
+        step_between_clips=args.clip_len // 2,
         transform=transform_test,
         frame_rate=args.frame_rate,
         extensions=("avi", "mp4"),
         output_format="TCHW",
+        _precomputed_metadata=metadata_path if metadata_path.exists() else None,
     )
 
     if args.cache_dataset:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         utils.save_on_master((dataset, valid_data_path), cache_path)
+
+        if not metadata_path.exists():
+            torch.save(dataset.video_clips.metadata, metadata_path)
     return dataset
 
 
@@ -266,9 +306,11 @@ def get_dataloader(args, dataset, sampler):
         sampler=sampler,
         num_workers=args.workers,
         pin_memory=True,
+        pin_memory_device="cuda",
         collate_fn=default_collate,
-        # persistent_workers=True if args.workers > 0 else False,
-        persistent_workers=False,
+        persistent_workers=True if args.workers > 0 else False,
+        # persistent_workers=False,
+        prefetch_factor=4,
     )
 
 
@@ -315,9 +357,8 @@ def load_model(args, device: torch.device, num_classes: int):
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
 
-    for name, param in model.named_parameters():
-        if not name.startswith("layer4") and not name.startswith("fc"):
-            param.requires_grad = False
+    for _, param in model.named_parameters():
+        param.requires_grad = True
 
     if args.load_official_checkpoint:
         official_checkpoint = (
@@ -400,7 +441,6 @@ def main(args):
     print("Validation Dataset")
     print("Total videos:", len(valid_dataset.samples))
     print("Total clips:", valid_dataset.video_clips.num_clips())
-    print("Sample path example:", valid_dataset.samples[:10])
     model = load_model(args, device=device, num_classes=num_classes)
     criterion = nn.CrossEntropyLoss()
 
@@ -428,7 +468,6 @@ def main(args):
     print("Training Dataset")
     print("Total videos:", len(train_dataset.samples))
     print("Total clips:", train_dataset.video_clips.num_clips())
-    print("Sample path example:", train_dataset.samples[:10])
 
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -436,7 +475,9 @@ def main(args):
         momentum=args.momentum,
         weight_decay=args.weight_decay,
     )
-    scaler = torch.amp.GradScaler(device) if args.amp else None
+    scaler = (
+        torch.amp.GradScaler(device) if args.amp and device.type == "cuda" else None
+    )
     lr_scheduler = get_learning_rate_scheduler(args, train_dataloader, optimizer)
 
     model_without_ddp = model
@@ -571,7 +612,7 @@ def get_args_parser(add_help=True):
         help="device (Use cuda, mps or cpu Default: dependent on what is available)",
     )
     parser.add_argument(
-        "--clip-len", default=8, type=int, help="number of frames per clip"
+        "--clip-len", default=16, type=int, help="number of frames per clip"
     )
     parser.add_argument("--frame-rate", default=4, type=int)
     parser.add_argument(
@@ -597,7 +638,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--lr-warmup-epochs", default=10, type=int)
     parser.add_argument("--lr-warmup-method", default="linear", type=str)
     parser.add_argument("--lr-warmup-decay", default=0.001, type=float)
-    parser.add_argument("--print-freq", default=100, type=int)
+    parser.add_argument("--print-freq", default=500, type=int)
     parser.add_argument("--output-dir", default=str(ROOT / "checkpoints"), type=str)
     parser.add_argument("--resume", default="", type=str)
     parser.add_argument("--start-epoch", default=0, type=int)
