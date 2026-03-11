@@ -60,7 +60,7 @@ Why are you running this experiment? What do you expect to improve?
 
 **Date:** 2025-03-02  
 **Checkpoint:** `./checkpoints/r2plus1d_16frames_112x112_10epochs/checkpoint_best.pth`  
-**Status:** 🔄 Running (Epoch 1/10 complete)
+**Status:** ❌ Failed (Epoch 4/10 complete)
 
 #### Hypothesis / Motivation
 
@@ -99,10 +99,9 @@ First valid experiment with correct dataset and frame count:
 
 **What's working well:**
 
-- Already beating leaderboard baseline (81.96%) by **10.37%** after just 1 epoch!
-- 3-clip aggregation at test time improves video accuracy (+1.59% over clip accuracy)
-- Training is stable despite large dataset
-- Model is learning effectively from full training set
+- Though the accuracy calculated when running the scripts provided locally was `92.33`, the accuracy provided by the leaderboard was only `81.4%` which is lower than the baseline accuracy
+- The inference time was `21.707` when the inference time of the baseline was `21.5`
+- The accuracy did not improvide after the first epoch and it dropped quite a bit with epoch 4, so the run was cancelled.
 
 **Observations:**
 
@@ -119,12 +118,25 @@ First valid experiment with correct dataset and frame count:
 
 ---
 
+### Run ID: `r2plus1d_vGPU_A5000_batch64_unfrozen`
+
+**Status:** 🔄 Ready to Launch
+**Hardware:** 1x A5000 Pro (24GB VRAM)
+
+#### Strategy
+
+- **Optimizer:** SGD, LR=0.001 (lower for full unfreeze).
+- **Scheduler:** CosineAnnealing (iteration-based) + 2 Epoch Warmup.
+- **Batch Size:** 64 (utilizing 24GB VRAM).
+- **Goal:** Establish a "True Backbone" baseline without the Epoch 4 crash.
+
+---
+
 ## Quick Reference - Best Models
 
 | Run ID | Video Acc@1 | Inference Time | Model Size | Status | Notes |
 |--------|-------------|----------------|------------|--------|-------|
 | r2plus1d_16frames_112x112 (epoch 1) | 92.33% | TBD | 120 MB | 🔄 Training | First valid model, already beats baseline |
-| r2plus1d_16frames_112x112 (epoch 10) | TBD (est. 96-97%) | TBD | 120 MB | 🔄 Training | Expected completion: March 5 |
 
 **Leaderboard Baseline:** 81.96%
 
@@ -154,6 +166,9 @@ First valid experiment with correct dataset and frame count:
 
 ## Ideas to Try
 
+- [ ] Cosine annealing learning rate schedule
+- [ ] Mixup/CutMix augmentation
+- [ ] Global Uniform Sampling
 - [ ] Ensemble multiple models at test time
 - [ ] Test-time augmentation (multiple crops/clips per video)
 - [ ] Knowledge distillation from larger model
@@ -162,29 +177,4 @@ First valid experiment with correct dataset and frame count:
 - [ ] Mixed precision training (FP16)
 - [ ] Gradient accumulation for effectively larger batch sizes
 - [ ] Different optimizers (AdamW, Lion)
-- [ ] Cosine annealing learning rate schedule
 - [ ] Label smoothing
-- [ ] Mixup/CutMix augmentation
-
----
-
-## Competition Notes
-
-- **Submission deadline:** April 30th, 2025
-- **Leaderboard opened:** March 1st, 2025
-- **Latency requirement:** <100ms per video on Dragonwing IQ-9075
-- **Current leaderboard baseline:** 81.96% (as of March 1, 2025)
-- **Our best model (epoch 1):** 92.33% (+10.37%)
-- **Organizer email:** <lowpowervision@gmail.com>
-- **Leaderboard metric:** Video Acc@1 (primary), with latency constraint
-- **Required input:** 16 frames per clip, 112×112 resolution (can be changed)
-
----
-
-## Resources
-
-- **Dataset:** QEVD-Fit-300k (92 classes, 11,452 videos)
-- **Device:** Qualcomm Dragonwing IQ-9075 EVK
-- **AI Hub:** <https://aihub.qualcomm.com>
-- **Competition:** LPCVC Track 2
-- **Baseline repo:** [Link if available]

@@ -1,5 +1,6 @@
 import json
 import os
+import random
 from typing import Iterable
 import numpy as np
 import torch
@@ -71,24 +72,38 @@ def main() -> None:
 
     skipped = 0
 
+    # Target directory for AI Hub calibration
+    # It's helpful to mirror the class structure
     with open(manifest_path, "w", encoding="utf-8") as manifest:
-        for video_path, label in iter_with_label(videos, DATA_ROOT):
+        selected_videos = random.sample(videos, k=200)
+        for video_path, label in iter_with_label(selected_videos, DATA_ROOT):
             rel = os.path.relpath(video_path, DATA_ROOT)
             rel_no_ext = os.path.splitext(rel)[0]
-            out_path = os.path.join(OUT_ROOT, f"{rel_no_ext}.npy")
+
+            # Save into class-specific subfolders to help organize
+            out_path = os.path.join(
+                OUT_ROOT, label, f"{os.path.basename(rel_no_ext)}.npy"
+            )
 
             try:
+                # IMPORTANT: Ensure process_video is using the same
+                # 'Dynamic Selection' logic we added to the Dataset.
                 clip = process_video(
                     video_path=video_path,
                     batch_size=1,
                     clip_len=CLIP_LEN,
-                    frame_rate=FRAME_RATE,
+                    frame_rate=None,  # Set to None to trigger uniform sampling across duration
                     clip_strategy="uniform",
                     device=torch.device("cpu"),
-                    output_dtype=torch.float32,  # Save as float32
+                    output_dtype=torch.float32,
                 )
 
-                # clip: (1, 3, T, 112, 112)
+                # Ensure shape is (1, 3, 16, 112, 112)
+                if clip.shape[2] != CLIP_LEN:
+                    # Fallback interpolation if process_video didn't hit exactly 16
+                    idx = torch.linspace(0, clip.shape[2] - 1, CLIP_LEN).long()
+                    clip = clip[:, :, idx, :, :]
+
                 save_tensor_npy(clip, out_path)
 
                 record = {

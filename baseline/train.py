@@ -12,13 +12,10 @@ import torchvision
 import utils
 from torch import nn
 from torch.utils.data.dataloader import default_collate
-from torchvision.datasets.samplers import (
-    DistributedSampler,
-    RandomClipSampler,
-    UniformClipSampler,
-)
+from torchvision.datasets.samplers import DistributedSampler
 
-from kinetics_dataset import KineticsWithVideoId
+
+from decord_dataset import QEVDDecordDataset
 from save_configs import save_config
 
 FILE = Path(__file__).resolve()
@@ -86,7 +83,7 @@ def train_one_epoch(
     )
 
     header = f"Epoch: [{epoch}]"
-    for video, _, target, _ in metric_logger.log_every(data_loader, print_freq, header):
+    for video, target, _ in metric_logger.log_every(data_loader, print_freq, header):
         start_time = time.time()
         video, target = video.to(device), target.to(device)
         with torch.amp.autocast(
@@ -134,7 +131,7 @@ def evaluate(model, criterion, data_loader, num_classes, device):
     clip_counts = torch.zeros((num_videos,), dtype=torch.float32)
 
     with torch.inference_mode():
-        for video, _, target, video_idx in metric_logger.log_every(
+        for video, target, video_idx in metric_logger.log_every(
             data_loader, 100, header
         ):
             video = video.to(device, non_blocking=True)
@@ -181,31 +178,12 @@ def evaluate(model, criterion, data_loader, num_classes, device):
     }
 
 
-def _get_cache_path(filepath, args, split):
-    import hashlib
-
-    value = (
-        f"{filepath}-{split}-{args.clip_len}-{args.kinetics_version}-{args.frame_rate}"
-    )
-    h = hashlib.sha1(value.encode()).hexdigest()
-
+def _get_precomputed_metadata_path(args, split="train"):
     if args.device == "cuda":
-        cache_root = Path("/home/jl_fs/kinetics_cache")
+        cache_root = Path(f"/home/jl_fs/kinetics_cache/{split}")
         cache_root.mkdir(parents=True, exist_ok=True)
 
-        return cache_root / (h[:10] + ".pt")
-
-    return (
-        Path.home() / ".torch" / "vision" / "datasets" / "kinetics" / (h[:10] + ".pt")
-    )
-
-
-def _get_precomputed_metadata_path(args):
-    if args.device == "cuda":
-        cache_root = Path("/home/jl_fs/kinetics_cache")
-        cache_root.mkdir(parents=True, exist_ok=True)
-
-        return cache_root / "kinetics_metadata.pt"
+        return cache_root / "torchcodec_metadata.pt"
 
     return (
         Path.home()
@@ -213,54 +191,43 @@ def _get_precomputed_metadata_path(args):
         / "vision"
         / "datasets"
         / "kinetics"
-        / "kinetics_metadata.pt"
+        / split
+        / "torchcodec_metadata.pt"
     )
 
 
-def load_train_dataset(args, crop_size: tuple, resize_size: tuple):
+def load_train_dataset(
+    args, crop_size: tuple, resize_size: tuple, class_map_path: Path
+):
     print("Loading training data")
     st = time.time()
-    train_data_path = args.data_path / "train"
-    cache_path = _get_cache_path(train_data_path, args, split="train")
+
     transform_train = presets.VideoClassificationPresetTrain(
         crop_size=crop_size, resize_size=resize_size
     )
 
-    if args.cache_dataset and cache_path.exists():
-        print(f"Loading train dataset from {cache_path}")
-        dataset, _ = torch.load(cache_path, weights_only=False)
-        dataset.transform = transform_train
-        return dataset
-
-    metadata_path = _get_precomputed_metadata_path()
-    dataset = KineticsWithVideoId(
-        args.data_path,
-        frames_per_clip=args.clip_len,
-        num_classes=args.kinetics_version,
-        split="train",
-        step_between_clips=args.clip_len // 2,
-        transform=transform_train,
-        frame_rate=args.frame_rate,
-        extensions=("avi", "mp4"),
-        output_format="TCHW",
-        _precomputed_metadata=metadata_path if metadata_path.exists() else None,
+    metadata = torch.load(
+        _get_precomputed_metadata_path(args, "train"),
+        weights_only=False,
     )
 
-    if args.cache_dataset:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        utils.save_on_master((dataset, train_data_path), cache_path)
+    dataset = QEVDDecordDataset(
+        frames_per_clip=args.clip_len,
+        transform=transform_train,
+        metadata=metadata,
+        class_map_path=class_map_path,
+    )
 
-        if not metadata_path.exists():
-            torch.save(dataset.video_clips.metadata, metadata_path)
-
-    print("Took", time.time() - st)
+    print(f"Training: {len(dataset.samples)} videos")
+    print(f"Time: {time.time() - st:.2f}s")
     return dataset
 
 
-def load_valid_dataset(args, crop_size: tuple, resize_size: tuple):
+def load_valid_dataset(
+    args, crop_size: tuple, resize_size: tuple, class_map_path: Path
+):
     print("Loading validation data")
-    valid_data_path = args.data_path / "val"
-    cache_path = _get_cache_path(valid_data_path, args, split="val")
+    st = time.time()
 
     if args.weights and args.test_only:
         weights = torchvision.models.get_weight(args.weights)
@@ -270,32 +237,20 @@ def load_valid_dataset(args, crop_size: tuple, resize_size: tuple):
             crop_size=crop_size, resize_size=resize_size
         )
 
-    if args.cache_dataset and cache_path.exists():
-        print(f"Loading valid dataset from {cache_path}")
-        dataset, _ = torch.load(cache_path, weights_only=False)
-        dataset.transform = transform_test
-        return dataset
-
-    metadata_path = _get_precomputed_metadata_path()
-    dataset = KineticsWithVideoId(
-        args.data_path,
-        frames_per_clip=args.clip_len,
-        num_classes=args.kinetics_version,
-        split="val",
-        step_between_clips=args.clip_len // 2,
-        transform=transform_test,
-        frame_rate=args.frame_rate,
-        extensions=("avi", "mp4"),
-        output_format="TCHW",
-        _precomputed_metadata=metadata_path if metadata_path.exists() else None,
+    metadata = torch.load(
+        _get_precomputed_metadata_path(args, "val"),
+        weights_only=False,
     )
 
-    if args.cache_dataset:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        utils.save_on_master((dataset, valid_data_path), cache_path)
+    dataset = QEVDDecordDataset(
+        frames_per_clip=args.clip_len,
+        transform=transform_test,
+        metadata=metadata,
+        class_map_path=class_map_path,
+    )
 
-        if not metadata_path.exists():
-            torch.save(dataset.video_clips.metadata, metadata_path)
+    print(f"Validation: {len(dataset.samples)} videos")
+    print(f"Time: {time.time() - st:.2f}s")
     return dataset
 
 
@@ -304,13 +259,13 @@ def get_dataloader(args, dataset, sampler):
         dataset,
         batch_size=args.batch_size,
         sampler=sampler,
+        # shuffle=True,
         num_workers=args.workers,
         pin_memory=True,
         pin_memory_device="cuda",
         collate_fn=default_collate,
         persistent_workers=True if args.workers > 0 else False,
-        # persistent_workers=False,
-        prefetch_factor=4,
+        prefetch_factor=4 if args.workers > 0 else None,
     )
 
 
@@ -351,58 +306,53 @@ def test_model(
 
 
 def load_model(args, device: torch.device, num_classes: int):
+    # 1. Initialize the standard model (defaults to 400 classes)
     model = torchvision.models.get_model(args.model, weights=args.weights)
-    model.to(device)
-    if args.distributed and args.sync_bn:
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+
+    # 2. SWAP THE HEAD TO 92 FIRST
+    # The checkpoint has shape [92, 512], so the model must too.
+    print(f"Adjusting model head to {num_classes} BEFORE loading checkpoint")
     model.fc = nn.Linear(model.fc.in_features, num_classes)
 
-    for _, param in model.named_parameters():
-        param.requires_grad = True
-
+    # 3. NOW LOAD THE CHECKPOINT
     if args.load_official_checkpoint:
         official_checkpoint = (
             ROOT / "checkpoints" / "official" / "official_checkpoint.pth"
         )
+        print(f"Loading weights from {official_checkpoint}")
         model_ckpt = torch.load(
             official_checkpoint, map_location="cpu", weights_only=False
         )
-        model.load_state_dict(model_ckpt["model"])
+
+        # This will now succeed because both are 92
+        model.load_state_dict(model_ckpt["model"], strict=True)
+
+    # 4. Sync and Move to Device
+    if args.distributed and args.sync_bn:
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+
+    for param in model.parameters():
+        param.requires_grad = True
 
     return model.to(device)
 
 
 def get_learning_rate_scheduler(args, train_dataloader, optimizer):
     iters_per_epoch = len(train_dataloader)
-    lr_milestones = [
-        iters_per_epoch * (m - args.lr_warmup_epochs) for m in args.lr_milestones
-    ]
-    main_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=lr_milestones, gamma=args.lr_gamma
+
+    total_cosine_iters = iters_per_epoch * (args.epochs - args.lr_warmup_epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=total_cosine_iters, eta_min=1e-6
     )
 
-    if args.lr_warmup_epochs <= 0:
-        return main_lr_scheduler
-
     warmup_iters = iters_per_epoch * args.lr_warmup_epochs
-    method = args.lr_warmup_method.lower()
-
-    if method == "linear":
-        warmup_lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=args.lr_warmup_decay, total_iters=warmup_iters
-        )
-    elif method == "constant":
-        warmup_lr_scheduler = torch.optim.lr_scheduler.ConstantLR(
-            optimizer, factor=args.lr_warmup_decay, total_iters=warmup_iters
-        )
-    else:
-        raise RuntimeError(
-            f"Invalid warmup method '{method}'. Use 'linear' or 'constant'."
-        )
+    warmup_lr_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=args.lr_warmup_decay, total_iters=warmup_iters
+    )
 
     return torch.optim.lr_scheduler.SequentialLR(
         optimizer,
-        schedulers=[warmup_lr_scheduler, main_lr_scheduler],
+        schedulers=[warmup_lr_scheduler, scheduler],
         milestones=[warmup_iters],
     )
 
@@ -426,22 +376,24 @@ def main(args):
     # Save the args used when running the command
     save_config(args)
 
+    class_map_path = Path(ROOT / "class_map.json")
     valid_dataset = load_valid_dataset(
-        args, tuple(args.val_crop_size), tuple(args.val_resize_size)
+        args,
+        tuple(args.val_crop_size),
+        tuple(args.val_resize_size),
+        class_map_path,
     )
-    num_classes = len(valid_dataset.classes)
 
-    test_sampler = UniformClipSampler(
-        valid_dataset.video_clips, args.val_clips_per_video
-    )
     if args.distributed:
-        test_sampler = DistributedSampler(test_sampler, shuffle=False)
+        test_sampler = DistributedSampler(valid_dataset, shuffle=False)
+    else:
+        test_sampler = torch.utils.data.SequentialSampler(valid_dataset)
+
     valid_dataloader = get_dataloader(args, valid_dataset, test_sampler)
 
     print("Validation Dataset")
     print("Total videos:", len(valid_dataset.samples))
-    print("Total clips:", valid_dataset.video_clips.num_clips())
-    model = load_model(args, device=device, num_classes=num_classes)
+    model = load_model(args, device=device, num_classes=92)
     criterion = nn.CrossEntropyLoss()
 
     if args.test_only:
@@ -449,25 +401,27 @@ def main(args):
             model=model,
             criterion=criterion,
             test_data_loader=valid_dataloader,
-            num_classes=num_classes,
+            num_classes=92,
             device=device,
             output_dir=args.output_dir,
         )
         return
 
     train_dataset = load_train_dataset(
-        args, tuple(args.train_crop_size), tuple(args.train_resize_size)
-    )
-    train_sampler = RandomClipSampler(
-        train_dataset.video_clips, args.train_clips_per_video
+        args,
+        tuple(args.train_crop_size),
+        tuple(args.train_resize_size),
+        class_map_path,
     )
     if args.distributed:
-        train_sampler = DistributedSampler(train_sampler)
+        train_sampler = DistributedSampler(train_dataset)
+    else:
+        train_sampler = torch.utils.data.RandomSampler(train_dataset)
+
     train_dataloader = get_dataloader(args, train_dataset, train_sampler)
 
     print("Training Dataset")
     print("Total videos:", len(train_dataset.samples))
-    print("Total clips:", train_dataset.video_clips.num_clips())
 
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -533,9 +487,7 @@ def main(args):
                 args.print_freq,
                 scaler,
             )
-            val_metrics = evaluate(
-                model, criterion, valid_dataloader, num_classes, device
-            )
+            val_metrics = evaluate(model, criterion, valid_dataloader, 92, device)
 
             # Log metrics
             history["train_loss"].append(train_metrics["loss"])
@@ -642,7 +594,6 @@ def get_args_parser(add_help=True):
     parser.add_argument("--output-dir", default=str(ROOT / "checkpoints"), type=str)
     parser.add_argument("--resume", default="", type=str)
     parser.add_argument("--start-epoch", default=0, type=int)
-    parser.add_argument("--cache-dataset", action="store_true")
     parser.add_argument("--sync-bn", action="store_true")
     parser.add_argument("--test-only", action="store_true")
     parser.add_argument(

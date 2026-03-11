@@ -338,7 +338,7 @@ def export_model(
         import numpy as np
 
         # Update data_dir to match your data preprocessed input tensors
-        data_dir = ""
+        data_dir = "/Users/tapasyagutta/workspace/edge-active/output_tensors"
 
         # Read the target frame count from the input_spec the framework passes in.
         # This ensures the tensor always matches what the compiled model was built for
@@ -354,18 +354,12 @@ def export_model(
                         tensor_x = np.load(os.path.join(cls_dir, f))
                         # Enforce frame count
                         current_t = tensor_x.shape[2]
-                        if current_t < t_frames:
-                            tensor_x = np.pad(
-                                tensor_x,
-                                (
-                                    (0, 0),
-                                    (0, 0),
-                                    (0, t_frames - current_t),
-                                    (0, 0),
-                                    (0, 0),
-                                ),
-                                mode="edge",
+                        if current_t != t_frames:
+                            # Use linear interpolation/indexing to resize temporally
+                            idx = np.linspace(0, current_t - 1, t_frames).astype(
+                                np.int32
                             )
+                            tensor_x = tensor_x[:, :, idx, :, :]
                         else:
                             tensor_x = tensor_x[:, :, :t_frames, :, :]
                         print(

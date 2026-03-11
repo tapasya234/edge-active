@@ -1,0 +1,64 @@
+{
+  "Checkpoint Name": "checkpoint_best.pth",
+  "Epoch": 5,
+  "Final Metrics": {
+    "clip_acc1": 92.41180579811386,
+    "clip_acc5": 99.55466294097101,
+    "clip_loss": 0.2431966259492842,
+    "video_acc1": 92.41180419921875,
+    "video_acc5": 99.5546646118164
+  },
+  "Training Configuration": {
+    "amp": true,
+    "batch_size": 64,
+    "clip_len": 16,
+    "data_path": "/home/data/QEVD_organised",
+    "device": "cuda",
+    "dist_url": "env://",
+    "distributed": false,
+    "epochs": 15,
+    "frame_rate": 4,
+    "kinetics_version": "400",
+    "load_official_checkpoint": true,
+    "lr": 0.001,
+    "lr_gamma": 0.1,
+    "lr_milestones": [
+      4,
+      8
+    ],
+    "lr_warmup_decay": 0.001,
+    "lr_warmup_epochs": 2,
+    "lr_warmup_method": "linear",
+    "model": "r2plus1d_18",
+    "momentum": 0.9,
+    "output_dir": "/home/jl_fs/checkpoints/batch64_unfrozen_codec",
+    "print_freq": 100,
+    "resume": "",
+    "start_epoch": 0,
+    "sync_bn": false,
+    "test_only": false,
+    "train_clips_per_video": 1,
+    "train_crop_size": [
+      112,
+      112
+    ],
+    "train_resize_size": [
+      128,
+      171
+    ],
+    "use_deterministic_algorithms": false,
+    "val_clips_per_video": 1,
+    "val_crop_size": [
+      112,
+      112
+    ],
+    "val_resize_size": [
+      128,
+      171
+    ],
+    "weight_decay": 0.0001,
+    "weights": null,
+    "workers": 14,
+    "world_size": 1
+  }
+}
