@@ -8,9 +8,9 @@ def share_with_organiers(
     status = compile_job.get_status()
 
     if status.code == qai_hub.JobStatus.State.SUCCESS.name:
-        print(" Compilation successful")
+        print("Compilation successful")
     else:
-        print(f" !!!! Compilation failed: {status.message}")
+        print(f"!!!! Compilation failed: {status.message}")
         return None
 
     compile_job.modify_sharing(add_emails=[organizer_email])
@@ -19,4 +19,4 @@ def share_with_organiers(
 
 
 if __name__ == "__main__":
-    share_with_organiers(job_id="j57d1jql5")
+    share_with_organiers(job_id="jp0r7lx9p")

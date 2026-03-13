@@ -7,13 +7,17 @@
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import tempfile
 import warnings
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
+
 import qai_hub as hub
+from sklearn import calibration
 import torch
 
 from qai_hub_models import Precision, TargetRuntime
@@ -43,6 +47,8 @@ from qai_hub_models.utils.printing import (
 )
 from qai_hub_models.utils.qai_hub_helpers import can_access_qualcomm_ai_hub
 
+from quantization_utils import load_calibration_samples
+
 
 def quantize_model(
     precision: Precision,
@@ -60,9 +66,11 @@ def quantize_model(
             "Quantization is only supported if both weights and activations are quantized."
         )
 
-    calibration_data = quantization_utils.get_calibration_data(
-        model, input_spec, num_calibration_samples
-    )
+    # calibration_data = quantization_utils.get_calibration_data(
+    #     model, input_spec, num_calibration_samples
+    # )
+    calibration_data = load_calibration_samples(num_samples=num_calibration_samples)
+    assert calibration_data["video"][0].shape == (1, 3, 16, 112, 112)
     return hub.submit_quantize_job(
         model=onnx_model,
         calibration_data=calibration_data,
@@ -173,8 +181,8 @@ def download_model(
         metadata_path = dst_path / "metadata.yaml"
         file_metadata = ModelFileMetadata.from_hub_model(target_model)
         model_metadata = ModelMetadata(
-            runtime=runtime,
-            precision=precision,
+            # runtime=runtime,
+            # precision=precision,
             tool_versions=tool_versions,
             model_files={model_file_name: file_metadata},
         )
@@ -324,7 +332,7 @@ def export_model(
     num_classes = 92  # TODO: set this to the number of classes in your dataset
     model.model.fc = nn.Linear(model.model.fc.in_features, num_classes)
 
-    MODEL_PATH = "/Users/tapasyagutta/workspace/edge-active//checkpoints/r2plus1d_16frames_112x112_10epochs/checkpoint_epoch1.pth"
+    MODEL_PATH = "/Users/tapasyagutta/workspace/edge-active/checkpoints/batch64_unfozen_codec/checkpoint_best.pth"
     if os.path.exists(MODEL_PATH):  # Update this path to your model checkpoint
         ckpt = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
         model.model.load_state_dict(
@@ -396,6 +404,18 @@ def export_model(
             precision,
             input_spec=input_spec,
         )
+
+        print("Target shapes: ", onnx_compile_job.target_shapes)
+        print("Shapes: ", onnx_compile_job.shapes)
+        # onnx_compile_job = hub.get_job("jg94ewzl5")
+        # status = onnx_compile_job.get_status()
+
+        # if status.code == hub.JobStatus.State.SUCCESS.name:
+        #     print("Compilation successful")
+        # else:
+        #     print(f"!!!! Compilation failed: {status.message}")
+        #     return None
+
         onnx_model = onnx_compile_job.get_target_model()
         assert onnx_model is not None, f"ONNX compile job failed: {onnx_compile_job}"
         quantize_job = quantize_model(
@@ -403,7 +423,7 @@ def export_model(
             model,
             model_name,
             onnx_model,
-            num_calibration_samples,
+            int(num_calibration_samples),
             quantize_options,
             input_spec,
         )
@@ -423,6 +443,8 @@ def export_model(
         input_spec=input_spec,
         extra_options=compile_options,
     )
+    print("Target shapes: ", onnx_compile_job.target_shapes)
+    print("Shapes: ", onnx_compile_job.shapes)
 
     # 4. Profiles the model performance on a real device
     profile_job: hub.client.ProfileJob | None = None
@@ -440,7 +462,7 @@ def export_model(
         inference_job = inference_model(
             model.sample_inputs(
                 input_spec=input_spec,
-                use_channel_last_format=target_runtime.channel_last_native_execution,
+                use_channel_last_format=False,
             ),
             model_name,
             device,
@@ -463,6 +485,7 @@ def export_model(
 
     # 7. Downloads the model asset to the local directory
     downloaded_model_path: Path | None = None
+    print("Tool versions: ", tool_versions)
     if not skip_downloading and tool_versions is not None:
         model_directory = output_path / ASSET_CONFIG.get_release_asset_name(
             MODEL_ID, target_runtime, precision, chipset

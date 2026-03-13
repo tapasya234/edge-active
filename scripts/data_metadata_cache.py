@@ -36,11 +36,6 @@ def run_manual_scan(split="train"):
 
     print(f"Successfully processed {len(results)}/{len(video_paths)} videos")
 
-    # Format into the structure torchvision expects
-    video_paths = [r[0] for r in results]
-    video_pts = [r[1] for r in results]
-    video_fps = [r[2] for r in results]
-
     metadata = {
         "video_paths": [r[0] for r in results],
         "video_num_frames": torch.tensor([r[1] for r in results], dtype=torch.int32),

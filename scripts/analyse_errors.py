@@ -7,12 +7,12 @@ from sklearn.metrics import confusion_matrix
 from torch.utils.data.dataloader import default_collate
 from tqdm import tqdm
 import json
-from presets import VideoClassificationPresetEval
 
 # Import your existing components
-from decord_dataset import QEVDDecordDataset
-from train import load_model, get_args_parser
-import utils
+from src.presets import VideoClassificationPresetEval
+from src.dataset import QEVDDecordDataset
+from src.train import load_model, get_args_parser
+import src.utils as utils
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]

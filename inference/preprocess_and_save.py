@@ -87,12 +87,10 @@ def main() -> None:
 
             try:
                 # IMPORTANT: Ensure process_video is using the same
-                # 'Dynamic Selection' logic we added to the Dataset.
+                # 'Dynamic Selection' logic as used during the training process.
                 clip = process_video(
                     video_path=video_path,
-                    batch_size=1,
                     clip_len=CLIP_LEN,
-                    frame_rate=None,  # Set to None to trigger uniform sampling across duration
                     clip_strategy="uniform",
                     device=torch.device("cpu"),
                     output_dtype=torch.float32,

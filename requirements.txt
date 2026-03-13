@@ -1,7 +1,6 @@
 # PyTorch
 torch==2.7.1
 torchvision==0.22.1
-decord
 
 # Qualcomm AI Hub
 qai_hub
@@ -13,6 +12,7 @@ onnxruntime>=1.16.0
 onnxscript
 
 # Data processing
+decord
 Pillow
 numpy
 av==16.0.1
@@ -20,11 +20,10 @@ av==16.0.1
 # Progress bars and utilities
 tqdm>=4.66.0
 
-# Optional but recommended
+# Visualisations
 matplotlib>=3.7.0  # For visualization
+seaborn 
 scikit-learn>=1.3.0  # For metrics
-tensorboard>=2.14.0  # For training monitoring
-seaborn
 
 scipy
 pycocotools

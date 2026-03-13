@@ -15,7 +15,7 @@ from torch.utils.data.dataloader import default_collate
 from torchvision.datasets.samplers import DistributedSampler
 
 
-from decord_dataset import QEVDDecordDataset
+from dataset import QEVDDecordDataset
 from save_configs import save_config
 
 FILE = Path(__file__).resolve()
@@ -397,6 +397,17 @@ def main(args):
     criterion = nn.CrossEntropyLoss()
 
     if args.test_only:
+        if args.resume:
+            checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
+            model_without_ddp = model
+            if args.distributed:
+                model = torch.nn.parallel.DistributedDataParallel(
+                    model, device_ids=[args.gpu]
+                )
+                model_without_ddp = model.module
+            model_without_ddp.load_state_dict(checkpoint["model"])
+            if args.amp and "scaler" in checkpoint:
+                scaler.load_state_dict(checkpoint["scaler"])
         test_model(
             model=model,
             criterion=criterion,
