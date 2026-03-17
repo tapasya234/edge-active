@@ -171,7 +171,7 @@ class MetricLogger:
             end = time.time()
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        print(f"{header} Total time: {total_time_str}")
+        print(f"{header} Total time: {total_time_str} End time: {time.time()}")
 
 
 def accuracy(output, target, topk=(1,)):

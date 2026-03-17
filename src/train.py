@@ -69,11 +69,14 @@ def train_one_epoch(
     device,
     epoch,
     print_freq,
+    warmup_epochs,
     scaler=None,
 ):
 
     if device.type == "mps":
         torch.mps.empty_cache()
+    elif device.type == "cuda":
+        torch.cuda.empty_cache()
 
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -83,31 +86,57 @@ def train_one_epoch(
     )
 
     header = f"Epoch: [{epoch}]"
-    for video, target, _ in metric_logger.log_every(data_loader, print_freq, header):
-        start_time = time.time()
-        video, target = video.to(device), target.to(device)
-        with torch.amp.autocast(
-            device.type, enabled=(scaler is not None and device.type == "cuda")
+    kl_alpha = 0.5 if epoch >= warmup_epochs else 0.0
+
+    try:
+        for video, target, _ in metric_logger.log_every(
+            data_loader, print_freq, header
         ):
-            output = model(video)
-            loss = criterion(output, target)
+            start_time = time.time()
+            video, target = video.to(device), target.to(device)
 
-        optimizer.zero_grad()
-        if scaler is not None:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            optimizer.step()
+            with torch.amp.autocast(
+                device.type, enabled=(scaler is not None and device.type == "cuda")
+            ):
+                B, N, C, T, H, W = video.shape
 
-        acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
-        batch_size = video.shape[0]
-        metric_logger.update(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
-        metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
-        metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
-        metric_logger.meters["clips/s"].update(batch_size / (time.time() - start_time))
-        lr_scheduler.step()
+                output = model(video.view(B * N, C, T, H, W))
+                output = output.view(B, N, -1)
+
+                target_expanded = target.view(-1, 1).expand(B, N).reshape(-1)
+                ce_loss = criterion(output.view(B * N, -1), target_expanded)
+
+                log_probs = torch.log_softmax(output, dim=-1)
+                with torch.no_grad():
+                    avg_probs = torch.softmax(output, dim=-1).mean(dim=1, keepdim=True)
+
+                kl_loss = torch.nn.functional.kl_div(
+                    log_probs, avg_probs, reduction="batchmean", log_target=False
+                )
+
+                loss = ce_loss + kl_alpha * kl_loss
+
+            optimizer.zero_grad()
+            if scaler is not None:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
+
+            acc1, acc5 = utils.accuracy(output.mean(dim=1), target, topk=(1, 5))
+
+            batch_size = video.shape[0]
+            metric_logger.update(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
+            metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
+            metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
+            metric_logger.meters["clips/s"].update(
+                batch_size / (time.time() - start_time)
+            )
+            lr_scheduler.step()
+    except Exception as e:
+        print(f"CRITICAL ERROR in Train: {e}")
 
     return {
         "loss": metric_logger.loss.global_avg,
@@ -119,6 +148,8 @@ def train_one_epoch(
 def evaluate(model, criterion, data_loader, num_classes, device):
     if device.type == "mps":
         torch.mps.empty_cache()
+    elif device.type == "cuda":
+        torch.cuda.empty_cache()
 
     model.eval()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -134,26 +165,56 @@ def evaluate(model, criterion, data_loader, num_classes, device):
         for video, target, video_idx in metric_logger.log_every(
             data_loader, 100, header
         ):
-            video = video.to(device, non_blocking=True)
-            target = target.to(device, non_blocking=True)
+            try:
+                video = video.to(device, non_blocking=True)
+                target = target.to(device, non_blocking=True)
 
-            output = model(video)
-            loss = criterion(output, target)
+                if video.ndim == 6:
+                    B, N, _, _, _, _ = video.shape
 
-            idx = video_idx.cpu()
-            tgt = target.cpu()
+                    # Process in smaller sub-batches to avoid OOM
+                    sub_batch_size = 16
+                    clip_outputs = []
 
-            agg_preds.index_add_(0, idx, output.cpu())
-            # clip_counts.index_add_(0, idx, torch.ones_like(idx, dtype=torch.float32))
-            clip_counts.index_add_(0, idx, torch.ones(idx.shape[0]))
-            agg_targets.index_copy_(0, idx, tgt)
+                    for batch_start in range(0, B, sub_batch_size):
+                        batch_end = min(batch_start + sub_batch_size, B)
+                        sub_video = video[batch_start:batch_end]
 
-            acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
-            batch_size = video.shape[0]
+                        # Process each clip
+                        sub_clips = []
+                        for clip_idx in range(N):
+                            clip = sub_video[:, clip_idx]
+                            clip_output = model(clip)
+                            sub_clips.append(clip_output)
 
-            metric_logger.update(loss=loss.item())
-            metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
-            metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
+                        # Average this sub-batch
+                        sub_output = torch.stack(sub_clips, dim=1).mean(dim=1)
+                        clip_outputs.append(sub_output)
+
+                    # Concatenate all sub-batches
+                    output = torch.cat(clip_outputs, dim=0)
+                    loss = criterion(output, target)
+
+                else:
+                    output = model(video)
+                    loss = criterion(output, target)
+
+                idx = video_idx.cpu()
+                tgt = target.cpu()
+
+                agg_preds.index_add_(0, idx, output.cpu())
+                clip_counts.index_add_(0, idx, torch.ones(idx.shape[0]))
+                agg_targets.index_copy_(0, idx, tgt)
+
+                acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
+                batch_size = video.shape[0]
+
+                metric_logger.update(loss=loss.item())
+                metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
+                metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
+
+            except Exception as e:
+                print(f"CRITICAL ERROR in Evaluate: {e}")
 
     metric_logger.synchronize_between_processes()
 
@@ -197,7 +258,11 @@ def _get_precomputed_metadata_path(args, split="train"):
 
 
 def load_train_dataset(
-    args, crop_size: tuple, resize_size: tuple, class_map_path: Path
+    args,
+    crop_size: tuple,
+    resize_size: tuple,
+    class_map_path: Path,
+    class_flip_mapping_path: Path,
 ):
     print("Loading training data")
     st = time.time()
@@ -216,6 +281,9 @@ def load_train_dataset(
         transform=transform_train,
         metadata=metadata,
         class_map_path=class_map_path,
+        class_flip_map_path=class_flip_mapping_path,
+        is_train_dataset=True,
+        num_clips_per_video=args.train_clips_per_video,
     )
 
     print(f"Training: {len(dataset.samples)} videos")
@@ -224,7 +292,11 @@ def load_train_dataset(
 
 
 def load_valid_dataset(
-    args, crop_size: tuple, resize_size: tuple, class_map_path: Path
+    args,
+    crop_size: tuple,
+    resize_size: tuple,
+    class_map_path: Path,
+    class_flip_mapping_path: Path,
 ):
     print("Loading validation data")
     st = time.time()
@@ -247,6 +319,9 @@ def load_valid_dataset(
         transform=transform_test,
         metadata=metadata,
         class_map_path=class_map_path,
+        class_flip_map_path=class_flip_mapping_path,
+        is_train_dataset=False,
+        num_clips_per_video=args.val_clips_per_video,
     )
 
     print(f"Validation: {len(dataset.samples)} videos")
@@ -262,7 +337,7 @@ def get_dataloader(args, dataset, sampler):
         # shuffle=True,
         num_workers=args.workers,
         pin_memory=True,
-        pin_memory_device="cuda",
+        # pin_memory_device="cuda",
         collate_fn=default_collate,
         persistent_workers=True if args.workers > 0 else False,
         prefetch_factor=4 if args.workers > 0 else None,
@@ -361,7 +436,7 @@ def save_history(history, output_dir, filename="training_history.json"):
     if output_dir and utils.is_main_process():
         with open(output_dir / filename, "w") as f:
             json.dump(history, f, indent=2)
-        print(f"History saved to {filename}")
+        print(f"History saved to {filename} at {time.time()}")
 
 
 def main(args):
@@ -376,12 +451,14 @@ def main(args):
     # Save the args used when running the command
     save_config(args)
 
-    class_map_path = Path(ROOT / "class_map.json")
+    class_map_path = Path(ROOT / "configs" / "class_map.json")
+    class_flip_mapping_path = Path(ROOT / "configs" / "class_flip_mapping.json")
     valid_dataset = load_valid_dataset(
         args,
         tuple(args.val_crop_size),
         tuple(args.val_resize_size),
         class_map_path,
+        class_flip_mapping_path,
     )
 
     if args.distributed:
@@ -391,8 +468,6 @@ def main(args):
 
     valid_dataloader = get_dataloader(args, valid_dataset, test_sampler)
 
-    print("Validation Dataset")
-    print("Total videos:", len(valid_dataset.samples))
     model = load_model(args, device=device, num_classes=92)
     criterion = nn.CrossEntropyLoss()
 
@@ -406,8 +481,6 @@ def main(args):
                 )
                 model_without_ddp = model.module
             model_without_ddp.load_state_dict(checkpoint["model"])
-            if args.amp and "scaler" in checkpoint:
-                scaler.load_state_dict(checkpoint["scaler"])
         test_model(
             model=model,
             criterion=criterion,
@@ -423,7 +496,9 @@ def main(args):
         tuple(args.train_crop_size),
         tuple(args.train_resize_size),
         class_map_path,
+        class_flip_mapping_path,
     )
+
     if args.distributed:
         train_sampler = DistributedSampler(train_dataset)
     else:
@@ -431,13 +506,9 @@ def main(args):
 
     train_dataloader = get_dataloader(args, train_dataset, train_sampler)
 
-    print("Training Dataset")
-    print("Total videos:", len(train_dataset.samples))
-
-    optimizer = torch.optim.SGD(
+    optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
-        momentum=args.momentum,
         weight_decay=args.weight_decay,
     )
     scaler = (
@@ -496,9 +567,21 @@ def main(args):
                 device,
                 epoch,
                 args.print_freq,
+                args.lr_warmup_epochs,
                 scaler,
             )
+
+            # Clear CUDA cache before validation
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
             val_metrics = evaluate(model, criterion, valid_dataloader, 92, device)
+
+            # Clear CUDA cache after validation
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
 
             # Log metrics
             history["train_loss"].append(train_metrics["loss"])
@@ -531,6 +614,8 @@ def main(args):
                         checkpoint, args.output_dir / "checkpoint_best.pth"
                     )
 
+                save_history(history, args.output_dir, "training_history.json")
+
     finally:
         save_history(history, args.output_dir, "training_history.json")
         total_time = time.time() - start_time
@@ -556,7 +641,7 @@ def main(args):
 def get_args_parser(add_help=True):
     import argparse
 
-    parser = argparse.ArgumentParser(description="Baseline Training", add_help=add_help)
+    parser = argparse.ArgumentParser(description="LPCVC Training", add_help=add_help)
     parser.add_argument(
         "--data-path", default=str(ROOT / "data" / "QEVD_organised"), type=str
     )

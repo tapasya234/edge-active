@@ -293,7 +293,12 @@ def export_model(
     model_name = get_export_model_name(
         Model, MODEL_ID, precision, additional_model_kwargs
     )
+
+    checkpoint_path = additional_model_kwargs.get("checkpoint_path")
+    data_dir = additional_model_kwargs.get("data_dir")
+
     print("Target Runtime: ", target_runtime)
+    print("Target Device: ", device)
     output_path = Path(output_dir or Path.cwd() / "export_assets")
     if fetch_static_assets or not can_access_qualcomm_ai_hub():
         static_model_path = export_without_hub_access(
@@ -332,12 +337,22 @@ def export_model(
     num_classes = 92  # TODO: set this to the number of classes in your dataset
     model.model.fc = nn.Linear(model.model.fc.in_features, num_classes)
 
-    MODEL_PATH = "/Users/tapasyagutta/workspace/edge-active/checkpoints/batch64_unfozen_codec/checkpoint_best.pth"
-    if os.path.exists(MODEL_PATH):  # Update this path to your model checkpoint
-        ckpt = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"Loading checkpoint from: {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         model.model.load_state_dict(
             ckpt["model"] if "model" in ckpt else ckpt, strict=True
         )
+
+        print(f"Checkpoint keys: {ckpt.keys()}")
+        print(f"Epoch: {ckpt.get('epoch', 'N/A')}")
+        print(
+            f"Validation accuracy: {ckpt.get('metrics', {}).get('video_acc1', 'N/A'):.2f}%"
+        )
+        print(f"Model state dict keys: {len(ckpt['model'].keys())} layers")
+
+    else:
+        print("Warning: No checkpoint loaded. Exporting with random weights.")
 
     # Provide a real sample input for the inference sanity check.
     # If data_dir is set to a directory of preprocessed .npy tensors, the first
@@ -345,14 +360,11 @@ def export_model(
     def custom_sample_inputs(input_spec=None):
         import numpy as np
 
-        # Update data_dir to match your data preprocessed input tensors
-        data_dir = "/Users/tapasyagutta/workspace/edge-active/output_tensors"
-
         # Read the target frame count from the input_spec the framework passes in.
         # This ensures the tensor always matches what the compiled model was built for
         # (e.g. 16 for QNN_CONTEXT_BINARY, 8 if you override num_frames=8).
         t_frames = input_spec["video"][0][2] if input_spec else 16
-        if os.path.exists(data_dir):
+        if data_dir and os.path.exists(data_dir):
             for cls in sorted(os.listdir(data_dir)):
                 cls_dir = os.path.join(data_dir, cls)
                 if not os.path.isdir(cls_dir):
@@ -562,6 +574,22 @@ def main() -> None:
         supported_precision_runtimes=supported_precision_runtimes,
         default_export_device="Dragonwing IQ-9075 EVK",
     )
+
+    parser.add_argument(
+        "--checkpoint-path",
+        dest="checkpoint_path",
+        type=str,
+        default=None,
+        help="Path to the model checkpoint (.pth file)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        dest="data_dir",
+        type=str,
+        default="/Users/tapasyagutta/workspace/edge-active/output_tensors",
+        help="Path to directory containing .npy input tensors",
+    )
+
     args = parser.parse_args()
 
     import sys
