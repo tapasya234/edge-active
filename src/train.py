@@ -17,6 +17,7 @@ from torchvision.datasets.samplers import DistributedSampler
 
 from dataset import QEVDDecordDataset
 from save_configs import save_config
+from early_stopper import EarlyStopper
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]
@@ -69,7 +70,6 @@ def train_one_epoch(
     device,
     epoch,
     print_freq,
-    warmup_epochs,
     scaler=None,
 ):
 
@@ -77,6 +77,7 @@ def train_one_epoch(
         torch.mps.empty_cache()
     elif device.type == "cuda":
         torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -86,7 +87,6 @@ def train_one_epoch(
     )
 
     header = f"Epoch: [{epoch}]"
-    kl_alpha = 0.5 if epoch >= warmup_epochs else 0.0
 
     try:
         for video, target, _ in metric_logger.log_every(
@@ -98,23 +98,20 @@ def train_one_epoch(
             with torch.amp.autocast(
                 device.type, enabled=(scaler is not None and device.type == "cuda")
             ):
-                B, N, C, T, H, W = video.shape
+                if video.ndim == 6:
+                    B, N, C, T, H, W = video.shape
 
-                output = model(video.view(B * N, C, T, H, W))
-                output = output.view(B, N, -1)
+                    output = model(video.view(B * N, C, T, H, W))
+                    output = output.view(B, N, -1)
 
-                target_expanded = target.view(-1, 1).expand(B, N).reshape(-1)
-                ce_loss = criterion(output.view(B * N, -1), target_expanded)
+                    target_expanded = target.view(-1, 1).expand(B, N).reshape(-1)
+                    loss = criterion(output.view(B * N, -1), target_expanded)
 
-                log_probs = torch.log_softmax(output, dim=-1)
-                with torch.no_grad():
-                    avg_probs = torch.softmax(output, dim=-1).mean(dim=1, keepdim=True)
-
-                kl_loss = torch.nn.functional.kl_div(
-                    log_probs, avg_probs, reduction="batchmean", log_target=False
-                )
-
-                loss = ce_loss + kl_alpha * kl_loss
+                    output_for_metrics = output.mean(dim=1)
+                else:
+                    output = model(video)
+                    loss = criterion(output, target)
+                    output_for_metrics = output
 
             optimizer.zero_grad()
             if scaler is not None:
@@ -125,9 +122,9 @@ def train_one_epoch(
                 loss.backward()
                 optimizer.step()
 
-            acc1, acc5 = utils.accuracy(output.mean(dim=1), target, topk=(1, 5))
-
+            acc1, acc5 = utils.accuracy(output_for_metrics, target, topk=(1, 5))
             batch_size = video.shape[0]
+
             metric_logger.update(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
             metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
             metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
@@ -150,6 +147,7 @@ def evaluate(model, criterion, data_loader, num_classes, device):
         torch.mps.empty_cache()
     elif device.type == "cuda":
         torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
     model.eval()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -172,32 +170,30 @@ def evaluate(model, criterion, data_loader, num_classes, device):
                 if video.ndim == 6:
                     B, N, _, _, _, _ = video.shape
 
-                    # Process in smaller sub-batches to avoid OOM
-                    sub_batch_size = 16
-                    clip_outputs = []
+                    all_outputs = []
+                    sub_batch_size = 8
 
                     for batch_start in range(0, B, sub_batch_size):
                         batch_end = min(batch_start + sub_batch_size, B)
                         sub_video = video[batch_start:batch_end]
 
-                        # Process each clip
-                        sub_clips = []
+                        clip_outputs = []
+
                         for clip_idx in range(N):
                             clip = sub_video[:, clip_idx]
-                            clip_output = model(clip)
-                            sub_clips.append(clip_output)
+                            clip_out = model(clip)
+                            clip_outputs.append(clip_out)
 
-                        # Average this sub-batch
-                        sub_output = torch.stack(sub_clips, dim=1).mean(dim=1)
-                        clip_outputs.append(sub_output)
+                        sub_output = torch.stack(clip_outputs, dim=1).mean(dim=1)
+                        all_outputs.append(sub_output)
 
                     # Concatenate all sub-batches
-                    output = torch.cat(clip_outputs, dim=0)
-                    loss = criterion(output, target)
+                    output = torch.cat(all_outputs, dim=0)
 
                 else:
-                    output = model(video)
-                    loss = criterion(output, target)
+                    output = model(video).detach()
+
+                loss = criterion(output, target)
 
                 idx = video_idx.cpu()
                 tgt = target.cpu()
@@ -329,18 +325,17 @@ def load_valid_dataset(
     return dataset
 
 
-def get_dataloader(args, dataset, sampler):
+def get_dataloader(args, dataset, sampler, batch_size, prefetch_factor=2):
     return torch.utils.data.DataLoader(
         dataset,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         sampler=sampler,
-        # shuffle=True,
         num_workers=args.workers,
         pin_memory=True,
         # pin_memory_device="cuda",
         collate_fn=default_collate,
         persistent_workers=True if args.workers > 0 else False,
-        prefetch_factor=4 if args.workers > 0 else None,
+        prefetch_factor=prefetch_factor if args.workers > 0 else None,
     )
 
 
@@ -381,15 +376,14 @@ def test_model(
 
 
 def load_model(args, device: torch.device, num_classes: int):
-    # 1. Initialize the standard model (defaults to 400 classes)
     model = torchvision.models.get_model(args.model, weights=args.weights)
 
-    # 2. SWAP THE HEAD TO 92 FIRST
     # The checkpoint has shape [92, 512], so the model must too.
     print(f"Adjusting model head to {num_classes} BEFORE loading checkpoint")
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
 
-    # 3. NOW LOAD THE CHECKPOINT
+    in_features = model.fc.in_features
+    model.fc = nn.Linear(in_features, num_classes)
+
     if args.load_official_checkpoint:
         official_checkpoint = (
             ROOT / "checkpoints" / "official" / "official_checkpoint.pth"
@@ -399,10 +393,20 @@ def load_model(args, device: torch.device, num_classes: int):
             official_checkpoint, map_location="cpu", weights_only=False
         )
 
-        # This will now succeed because both are 92
         model.load_state_dict(model_ckpt["model"], strict=True)
 
-    # 4. Sync and Move to Device
+    if args.dropout > 0:
+        loaded_weights = model.fc.weight.data.clone()
+        loaded_bias = model.fc.bias.data.clone()
+
+        model.fc = nn.Sequential(
+            nn.Dropout(p=args.dropout),
+            nn.Linear(in_features, num_classes),
+        )
+
+        model.fc[1].weight.data = loaded_weights
+        model.fc[1].bias.data = loaded_bias
+
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
@@ -466,10 +470,16 @@ def main(args):
     else:
         test_sampler = torch.utils.data.SequentialSampler(valid_dataset)
 
-    valid_dataloader = get_dataloader(args, valid_dataset, test_sampler)
+    valid_dataloader = get_dataloader(
+        args,
+        valid_dataset,
+        test_sampler,
+        args.val_batch_size,
+        prefetch_factor=2,
+    )
 
     model = load_model(args, device=device, num_classes=92)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
 
     if args.test_only:
         if args.resume:
@@ -504,7 +514,13 @@ def main(args):
     else:
         train_sampler = torch.utils.data.RandomSampler(train_dataset)
 
-    train_dataloader = get_dataloader(args, train_dataset, train_sampler)
+    train_dataloader = get_dataloader(
+        args,
+        train_dataset,
+        train_sampler,
+        args.train_batch_size,
+        prefetch_factor=4,
+    )
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -520,6 +536,12 @@ def main(args):
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
+
+    early_stopper = EarlyStopper(
+        args.early_stopping_patience,
+        delta=0.001,
+        mode="max",
+    )
 
     print("Start training")
     history = {
@@ -567,21 +589,36 @@ def main(args):
                 device,
                 epoch,
                 args.print_freq,
-                args.lr_warmup_epochs,
                 scaler,
             )
 
-            # Clear CUDA cache before validation
             if device.type == "cuda":
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
+                torch.cuda.ipc_collect()
+
+                print(
+                    f"GPU memory before validation: {torch.cuda.memory_allocated() / 1e9:.2f} GB"
+                )
 
             val_metrics = evaluate(model, criterion, valid_dataloader, 92, device)
 
-            # Clear CUDA cache after validation
             if device.type == "cuda":
+                print(f"\n=== Memory Debug ===")
+                print(f"Allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+                print(f"Reserved:  {torch.cuda.memory_reserved() / 1e9:.2f} GB")
+                print(
+                    f"Peak (will reset): {torch.cuda.max_memory_allocated() / 1e9:.2f} GB"
+                )
+
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
+                torch.cuda.ipc_collect()
+                torch.cuda.reset_peak_memory_stats()
+                print(
+                    f"Peak after reset: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB"
+                )
+                print("===================\n")
 
             # Log metrics
             history["train_loss"].append(train_metrics["loss"])
@@ -615,6 +652,10 @@ def main(args):
                     )
 
                 save_history(history, args.output_dir, "training_history.json")
+
+            if early_stopper.check(val_metrics["video_acc1"]):
+                print(f"Early stopping triggered at epoch {epoch}")
+                break
 
     finally:
         save_history(history, args.output_dir, "training_history.json")
@@ -675,7 +716,8 @@ def get_args_parser(add_help=True):
         type=int,
         help="maximum number of clips per video to consider during evaluation",
     )
-    parser.add_argument("-b", "--batch-size", default=24, type=int)
+    parser.add_argument("--train-batch-size", default=24, type=int)
+    parser.add_argument("--val-batch-size", default=16, type=int)
     parser.add_argument("--epochs", default=15, type=int)
     parser.add_argument("-j", "--workers", default=10, type=int)
     parser.add_argument("--lr", default=0.01, type=float)
@@ -706,6 +748,9 @@ def get_args_parser(add_help=True):
     parser.add_argument("--weights", default=None, type=str)
     parser.add_argument("--world-size", default=1, type=int)
     parser.add_argument("--dist-url", default="env://", type=str)
+    parser.add_argument("--early-stopping-patience", default=2, type=int)
+    parser.add_argument("--dropout", default=0.0, type=float)
+    parser.add_argument("--label-smoothing", default=0.0, type=float)
     return parser
 
 

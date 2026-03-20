@@ -334,8 +334,11 @@ def export_model(
     import torch.nn as nn
     import torch
 
-    num_classes = 92  # TODO: set this to the number of classes in your dataset
-    model.model.fc = nn.Linear(model.model.fc.in_features, num_classes)
+    num_classes = 92
+    model.model.fc = nn.Sequential(
+        nn.Dropout(p=0.1),
+        nn.Linear(model.model.fc.in_features, num_classes),
+    )
 
     if checkpoint_path and os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from: {checkpoint_path}")
