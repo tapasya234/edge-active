@@ -1,0 +1,58 @@
+{
+  "amp": true,
+  "clip_len": 16,
+  "data_path": "/home/data/QEVD_organised",
+  "device": "cuda",
+  "dist_url": "env://",
+  "distributed": false,
+  "dropout": 0.2,
+  "early_stopping_patience": 3,
+  "epochs": 15,
+  "frame_rate": 4,
+  "kinetics_version": "400",
+  "label_smoothing": 0.1,
+  "load_official_checkpoint": true,
+  "lr": 0.0004,
+  "lr_gamma": 0.1,
+  "lr_milestones": [
+    20,
+    30,
+    40
+  ],
+  "lr_warmup_decay": 0.001,
+  "lr_warmup_epochs": 2,
+  "lr_warmup_method": "linear",
+  "model": "r2plus1d_18",
+  "momentum": 0.9,
+  "output_dir": "/home/jl_fs/checkpoints/randomErasing_2train",
+  "print_freq": 100,
+  "resume": "/home/jl_fs/checkpoints/randomErasing_2train/checkpoint_latest.pth",
+  "start_epoch": 0,
+  "sync_bn": false,
+  "test_only": false,
+  "train_batch_size": 24,
+  "train_clips_per_video": 2,
+  "train_crop_size": [
+    112,
+    112
+  ],
+  "train_resize_size": [
+    128,
+    171
+  ],
+  "use_deterministic_algorithms": false,
+  "val_batch_size": 16,
+  "val_clips_per_video": 3,
+  "val_crop_size": [
+    112,
+    112
+  ],
+  "val_resize_size": [
+    128,
+    171
+  ],
+  "weight_decay": 0.05,
+  "weights": null,
+  "workers": 14,
+  "world_size": 1
+}
