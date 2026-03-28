@@ -30,9 +30,16 @@ class VideoClassificationPresetTrain:
         self.hflip = transforms.RandomHorizontalFlip(p=hflip_prob)
         self.random_erasing = transforms.RandomErasing(
             p=erasing_prob,
-            scale=(0.02, 0.1),
+            scale=(0.02, 0.05),
             ratio=(0.3, 3.3),
             value="random",
+        )
+
+        self.color_jitter = transforms.ColorJitter(
+            brightness=0.1,
+            contrast=0.1,
+            saturation=0.1,
+            hue=0.03,
         )
 
         self.to_tensor = ConvertBCHWtoCBHW()
@@ -47,12 +54,14 @@ class VideoClassificationPresetTrain:
         else:
             did_flip = False
 
+        if torch.rand(1).item() < 0.5:
+            x = self.color_jitter(x)
+
         x = self.normalize(x)
         x = self.crop(x)
-
         x = self.random_erasing(x)
-
         x = self.to_tensor(x)
+
         return x, did_flip
 
 

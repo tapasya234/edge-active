@@ -116,10 +116,13 @@ def train_one_epoch(
             optimizer.zero_grad()
             if scaler is not None:
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
             acc1, acc5 = utils.accuracy(output_for_metrics, target, topk=(1, 5))
@@ -395,7 +398,40 @@ def load_model(args, device: torch.device, num_classes: int):
 
         model.load_state_dict(model_ckpt["model"], strict=True)
 
-    if args.dropout > 0:
+    if args.load_best_checkpoint:
+        best_checkpoint = ROOT / "checkpoints" / "best" / "checkpoint_best.pth"
+        print(f"Loading weights from {best_checkpoint}")
+        model_ckpt = torch.load(best_checkpoint, map_location="cpu", weights_only=False)
+
+        # Load model weights (handles both old and new fc formats)
+        if args.dropout > 0:
+            # Extract weights if fc is wrapped in Sequential
+            state_dict = model_ckpt["model"]
+            fc_weight = state_dict.get("fc.weight", state_dict.get("fc.1.weight"))
+            fc_bias = state_dict.get("fc.bias", state_dict.get("fc.1.bias"))
+
+            # Wrap in dropout
+            model.fc = nn.Sequential(
+                nn.Dropout(p=args.dropout),
+                nn.Linear(in_features, num_classes),
+            )
+
+            # Assign weights
+            if fc_weight is not None:
+                model.fc[1].weight.data = fc_weight
+                model.fc[1].bias.data = fc_bias
+
+            model.load_state_dict(model_ckpt["model"], strict=False)
+        else:
+            model.load_state_dict(model_ckpt["model"], strict=True)
+
+        print(f"Loaded from epoch {model_ckpt.get('epoch', 'unknown')}")
+        if "metrics" in model_ckpt:
+            print(
+                f"Previous test accuracy: {model_ckpt['metrics'].get('video_acc1', 'N/A'):.2f}%"
+            )
+
+    if args.dropout > 0 and not args.load_best_checkpoint:
         loaded_weights = model.fc.weight.data.clone()
         loaded_bias = model.fc.bias.data.clone()
 
@@ -573,6 +609,12 @@ def main(args):
             if "val_video_acc1" in history and len(history["val_video_acc1"]) > 0:
                 best_acc = max(history["val_video_acc1"])
 
+        if "earky_stopper" in checkpoint:
+            early_stopper.load_state_dict(checkpoint["early_stopper"])
+            print(
+                f"Restored early stopper: best={early_stopper.best_value}, counter={early_stopper.counter}"
+            )
+
     start_time = time.time()
 
     try:
@@ -639,6 +681,7 @@ def main(args):
                     "args": args,
                     "metrics": val_metrics,
                     "history": history,
+                    "earky_stopper": early_stopper.state_dict(),
                 }
                 if args.amp:
                     checkpoint["scaler"] = scaler.state_dict()
@@ -740,7 +783,10 @@ def get_args_parser(add_help=True):
         help="Forces the use of deterministic algorithms only.",
     )
     parser.add_argument("--amp", action="store_true")
-    parser.add_argument("--load-official-checkpoint", action="store_true")
+    parser.add_argument(
+        "--load-official-checkpoint", default=False, action="store_true"
+    )
+    parser.add_argument("--load-best-checkpoint", action="store_true")
     parser.add_argument("--val-resize-size", default=(128, 171), nargs="+", type=int)
     parser.add_argument("--val-crop-size", default=(112, 112), nargs="+", type=int)
     parser.add_argument("--train-resize-size", default=(128, 171), nargs="+", type=int)

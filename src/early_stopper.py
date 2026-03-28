@@ -27,3 +27,21 @@ class EarlyStopper:
 
         self.counter += 1
         return self.counter >= self.patience
+
+    def state_dict(self):
+        """Returns the state of the stopper as a dictionary."""
+        return {
+            "patience": self.patience,
+            "counter": self.counter,
+            "delta": self.delta,
+            "best_value": self.best_value,
+            "mode": self.mode,
+        }
+
+    def load_state_dict(self, state_dict):
+        """Loads the stopper state from a dictionary."""
+        self.patience = state_dict["patience"]
+        self.counter = state_dict["counter"]
+        self.delta = state_dict["delta"]
+        self.best_value = state_dict["best_value"]
+        self.mode = state_dict["mode"]

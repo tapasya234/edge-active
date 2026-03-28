@@ -61,6 +61,8 @@ class QEVDDecordDataset(Dataset):
             for _ in range(self.num_clips_per_video):
                 if self.is_train_dataset:
                     indices = self._get_sample_train_indices(T_total, fps)
+                    # Jitter
+                    # indices = [idx + random.randint(-1, 1) for idx in indices]
                 else:
                     indices = self._get_sample_validation_indices(T_total, fps)
 
@@ -84,7 +86,8 @@ class QEVDDecordDataset(Dataset):
             )
             print(f"Warning: Corrupted video at index {idx}, using zero tensor: {e}")
         finally:
-            del vr
+            if vr in locals():
+                del vr
 
         return video_tensor, label_idx, idx
 
@@ -153,4 +156,7 @@ class QEVDDecordDataset(Dataset):
         # Sample from center of each segment
         seg_size = len(resampled_indices) / self.frames_per_clip
         indices = [int((i + 0.5) * seg_size) for i in range(self.frames_per_clip)]
+        # indices = torch.linspace(
+        #     0, len(resampled_indices) - 1, self.frames_per_clip
+        # ).long()
         return [min(i, len(resampled_indices) - 1) for i in indices]
